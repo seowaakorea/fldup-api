@@ -1,176 +1,112 @@
 export default async function handler(req, res) {
   try {
     res.setHeader('Access-Control-Allow-Origin', 'https://fldup.com');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-    if (req.method === 'OPTIONS') {
-      return res.status(200).end();
-    }
+    const API_KEY = process.env.IMWEB_API_KEY;
+    const SECRET_KEY = process.env.IMWEB_SECRET_KEY;
 
-    const API_KEY = (process.env.IMWEB_API_KEY || '').trim();
-    const SECRET_KEY = (process.env.IMWEB_SECRET_KEY || '').trim();
-
-    if (!API_KEY || !SECRET_KEY) {
-      return res.status(500).json({
-        ok: false,
-        message: 'Vercel 환경변수 IMWEB_API_KEY 또는 IMWEB_SECRET_KEY가 없습니다.'
-      });
-    }
-
-    const tokenUrl =
-      `https://api.imweb.me/v2/auth?key=${encodeURIComponent(API_KEY)}&secret=${encodeURIComponent(SECRET_KEY)}`;
-
-    const tokenResponse = await fetch(tokenUrl, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json'
+    // 👉 매출 대상 (고객사)
+    const targetMembers = [
+      {
+        id: 'seowaa',
+        memberCode: 'm20251111951335dbfdb68'
+      },
+      {
+        id: 'yxxnpd',
+        memberCode: 'm20251110646a2d71df48d'
       }
-    });
+    ];
 
-    const tokenData = await tokenResponse.json();
+    // 👉 토큰 발급
+    const tokenRes = await fetch(
+      `https://api.imweb.me/v2/auth?key=${API_KEY}&secret=${SECRET_KEY}`
+    );
 
+    const tokenData = await tokenRes.json();
     const accessToken =
       tokenData.access_token ||
-      tokenData.accessToken ||
-      tokenData.token ||
-      tokenData.data?.access_token ||
-      tokenData.data?.accessToken ||
-      tokenData.data?.token;
+      tokenData.data?.access_token;
 
-    if (!accessToken) {
-      return res.status(401).json({
-        ok: false,
-        message: '아임웹 access token 발급 실패',
-        raw: tokenData
-      });
-    }
-
+    // 👉 주문 조회 (30일)
     const now = new Date();
     const from = new Date();
     from.setDate(now.getDate() - 30);
 
-    const orderDateFrom = Math.floor(from.getTime() / 1000);
-    const orderDateTo = Math.floor(now.getTime() / 1000);
-
-    const ordersUrl =
-      `https://api.imweb.me/v2/shop/orders` +
-      `?order_date_from=${orderDateFrom}` +
-      `&order_date_to=${orderDateTo}`;
-
-    const ordersResponse = await fetch(ordersUrl, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json',
-        'access-token': accessToken
+    const ordersRes = await fetch(
+      `https://api.imweb.me/v2/shop/orders?order_date_from=${Math.floor(from.getTime()/1000)}&order_date_to=${Math.floor(now.getTime()/1000)}`,
+      {
+        headers: {
+          'access-token': accessToken
+        }
       }
-    });
+    );
 
-    const ordersData = await ordersResponse.json();
+    const ordersData = await ordersRes.json();
 
-    const rawOrders =
+    const orders =
       ordersData.data?.list ||
-      ordersData.data?.orders ||
       ordersData.data ||
-      ordersData.list ||
-      ordersData.orders ||
       [];
 
-    const orders = Array.isArray(rawOrders) ? rawOrders : [];
+    // 👉 필터링 (member_code 기준)
+    const filtered = orders.filter(o => {
+      const code = o.orderer?.member_code;
+      return targetMembers.some(m => m.memberCode === code);
+    });
 
-    const orderers = orders.map((order) => {
-      return {
-        orderNo:
-          order.order_no ||
-          order.orderNo ||
-          order.order_code ||
-          order.orderCode ||
-          '',
+    // 👉 집계
+    const summary = {};
 
-        orderCode:
-          order.order_code ||
-          order.orderCode ||
-          '',
-
-        orderTime:
-          order.order_time ||
-          order.order_date ||
-          order.created_at ||
-          '',
-
-        memberCode:
-          order.orderer?.member_code || '',
-
-        name:
-          order.orderer?.name || '',
-
-        email:
-          order.orderer?.email || '',
-
-        phone:
-          order.orderer?.call || '',
-
-        payType:
-          order.payment?.pay_type || '',
-
-        totalPrice:
-          Number(order.payment?.total_price || 0),
-
-        paymentAmount:
-          Number(order.payment?.payment_amount || 0),
-
-        paymentTime:
-          order.payment?.payment_time || '',
-
-        completeTime:
-          order.complete_time || 0
+    targetMembers.forEach(m => {
+      summary[m.id] = {
+        memberId: m.id,
+        orderCount: 0,
+        totalAmount: 0
       };
     });
 
-    const uniqueOrderersMap = {};
+    filtered.forEach(order => {
+      const code = order.orderer?.member_code;
 
-    orderers.forEach((row) => {
-      const key = row.memberCode || row.email || row.name || 'unknown';
+      const member = targetMembers.find(m => m.memberCode === code);
 
-      if (!uniqueOrderersMap[key]) {
-        uniqueOrderersMap[key] = {
-          memberCode: row.memberCode,
-          name: row.name,
-          email: row.email,
-          phone: row.phone,
-          orderCount: 0,
-          totalPaymentAmount: 0,
-          lastOrderNo: '',
-          lastOrderTime: ''
-        };
-      }
+      if (!member) return;
 
-      uniqueOrderersMap[key].orderCount += 1;
-      uniqueOrderersMap[key].totalPaymentAmount += row.paymentAmount;
-      uniqueOrderersMap[key].lastOrderNo = row.orderNo;
-      uniqueOrderersMap[key].lastOrderTime = row.orderTime;
+      const amount =
+        order.payment?.payment_amount || 0;
+
+      summary[member.id].orderCount += 1;
+      summary[member.id].totalAmount += amount;
+    });
+
+    // 👉 전체 합계
+    const total = {
+      orderCount: 0,
+      amount: 0
+    };
+
+    Object.values(summary).forEach(s => {
+      total.orderCount += s.orderCount;
+      total.amount += s.totalAmount;
     });
 
     return res.status(200).json({
       ok: true,
-      mode: 'member_code_check',
-      message: '최근 30일 주문자 member_code 확인용 응답입니다.',
-      period: {
-        days: 30,
-        orderDateFrom,
-        orderDateTo
-      },
-      debug: {
-        fetchedOrderCount: orders.length
-      },
-      uniqueOrderers: Object.values(uniqueOrderersMap),
-      orders: orderers
+      total,
+      summaryByMember: Object.values(summary),
+      orders: filtered.map(o => ({
+        orderNo: o.order_no,
+        memberCode: o.orderer?.member_code,
+        name: o.orderer?.name,
+        amount: o.payment?.payment_amount,
+        date: o.order_time
+      }))
     });
-  } catch (error) {
+
+  } catch (err) {
     return res.status(500).json({
       ok: false,
-      message: '주문자 member_code 확인 중 오류가 발생했습니다.',
-      error: error.message
+      error: err.message
     });
   }
 }
