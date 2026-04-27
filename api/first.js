@@ -1,5 +1,11 @@
 export default async function handler(req, res) {
   try {
+res.setHeader(
+  'Content-Security-Policy',
+  "frame-ancestors https://fldup.com https://www.fldup.com https://seowaa.imweb.me"
+);
+res.setHeader('X-Frame-Options', 'ALLOWALL');
+    
     const API_KEY = (process.env.IMWEB_API_KEY || '').trim();
     const SECRET_KEY = (process.env.IMWEB_SECRET_KEY || '').trim();
 
