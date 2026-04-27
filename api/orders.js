@@ -18,128 +18,203 @@ export default async function handler(req, res) {
       });
     }
 
-    async function requestTokenByGet() {
-      const tokenUrl =
-        `https://api.imweb.me/v2/auth?key=${encodeURIComponent(API_KEY)}&secret=${encodeURIComponent(SECRET_KEY)}`;
+    const allowedMemberIds = ['yxxnpd', 'seowaa'];
 
-      const response = await fetch(tokenUrl, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json'
-        }
-      });
+    const tokenUrl =
+      `https://api.imweb.me/v2/auth?key=${encodeURIComponent(API_KEY)}&secret=${encodeURIComponent(SECRET_KEY)}`;
 
-      const data = await response.json().catch(() => ({}));
+    const tokenResponse = await fetch(tokenUrl, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json'
+      }
+    });
 
-      return {
-        method: 'GET_QUERY',
-        status: response.status,
-        data
-      };
-    }
+    const tokenData = await tokenResponse.json();
 
-    async function requestTokenByPostJson() {
-      const response = await fetch('https://api.imweb.me/v2/auth', {
-        method: 'POST',
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          key: API_KEY,
-          secret: SECRET_KEY
-        })
-      });
-
-      const data = await response.json().catch(() => ({}));
-
-      return {
-        method: 'POST_JSON',
-        status: response.status,
-        data
-      };
-    }
-
-    async function requestTokenByPostForm() {
-      const body = new URLSearchParams();
-      body.append('key', API_KEY);
-      body.append('secret', SECRET_KEY);
-
-      const response = await fetch('https://api.imweb.me/v2/auth', {
-        method: 'POST',
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
-        },
-        body: body.toString()
-      });
-
-      const data = await response.json().catch(() => ({}));
-
-      return {
-        method: 'POST_FORM',
-        status: response.status,
-        data
-      };
-    }
-
-    function extractAccessToken(data) {
-      return (
-        data.access_token ||
-        data.accessToken ||
-        data.token ||
-        data.data?.access_token ||
-        data.data?.accessToken ||
-        data.data?.token ||
-        ''
-      );
-    }
-
-    const attempts = [];
-
-    const getAttempt = await requestTokenByGet();
-    attempts.push(getAttempt);
-
-    let accessToken = extractAccessToken(getAttempt.data);
-    let successMethod = getAttempt.method;
-
-    if (!accessToken) {
-      const postJsonAttempt = await requestTokenByPostJson();
-      attempts.push(postJsonAttempt);
-      accessToken = extractAccessToken(postJsonAttempt.data);
-      successMethod = postJsonAttempt.method;
-    }
-
-    if (!accessToken) {
-      const postFormAttempt = await requestTokenByPostForm();
-      attempts.push(postFormAttempt);
-      accessToken = extractAccessToken(postFormAttempt.data);
-      successMethod = postFormAttempt.method;
-    }
+    const accessToken =
+      tokenData.access_token ||
+      tokenData.accessToken ||
+      tokenData.token ||
+      tokenData.data?.access_token ||
+      tokenData.data?.accessToken ||
+      tokenData.data?.token;
 
     if (!accessToken) {
       return res.status(401).json({
         ok: false,
         message: '아임웹 access token 발급 실패',
-        hint: '키/시크릿이 맞는데도 실패하면 API 사용 권한 또는 사이트 선택을 다시 확인해야 합니다.',
-        keyLength: API_KEY.length,
-        secretLength: SECRET_KEY.length,
-        attempts
+        raw: tokenData
       });
     }
 
+    const now = new Date();
+    const from = new Date();
+    from.setDate(now.getDate() - 30);
+
+    const orderDateFrom = Math.floor(from.getTime() / 1000);
+    const orderDateTo = Math.floor(now.getTime() / 1000);
+
+    const ordersUrl =
+      `https://api.imweb.me/v2/shop/orders` +
+      `?order_date_from=${orderDateFrom}` +
+      `&order_date_to=${orderDateTo}`;
+
+    const ordersResponse = await fetch(ordersUrl, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        'access-token': accessToken
+      }
+    });
+
+    const ordersData = await ordersResponse.json();
+
+    const rawOrders =
+      ordersData.data?.list ||
+      ordersData.data?.orders ||
+      ordersData.data ||
+      ordersData.list ||
+      ordersData.orders ||
+      [];
+
+    const orders = Array.isArray(rawOrders) ? rawOrders : [];
+
+    function getMemberId(order) {
+      return (
+        order.member_id ||
+        order.memberId ||
+        order.user_id ||
+        order.userId ||
+        order.member?.id ||
+        order.member?.member_id ||
+        order.orderer?.member_id ||
+        order.orderer?.id ||
+        order.buyer?.member_id ||
+        order.buyer?.id ||
+        ''
+      );
+    }
+
+    function getOrderAmount(order) {
+      return Number(
+        order.actual_payment_price ||
+        order.payment_price ||
+        order.total_price ||
+        order.order_price ||
+        order.price ||
+        order.pay_price ||
+        0
+      );
+    }
+
+    function getOrderNo(order) {
+      return (
+        order.order_no ||
+        order.orderNo ||
+        order.order_code ||
+        order.orderCode ||
+        order.no ||
+        order.uid ||
+        ''
+      );
+    }
+
+    function getOrderStatus(order) {
+      return (
+        order.status ||
+        order.order_status ||
+        order.orderStatus ||
+        order.payment_status ||
+        ''
+      );
+    }
+
+    function getOrderDate(order) {
+      return (
+        order.order_time ||
+        order.order_date ||
+        order.orderDate ||
+        order.created_at ||
+        order.createdAt ||
+        ''
+      );
+    }
+
+    const filteredOrders = orders.filter((order) => {
+      const memberId = getMemberId(order);
+      return allowedMemberIds.includes(memberId);
+    });
+
+    const summaryByMember = {};
+
+    allowedMemberIds.forEach((id) => {
+      summaryByMember[id] = {
+        memberId: id,
+        orderCount: 0,
+        totalAmount: 0
+      };
+    });
+
+    const orderList = filteredOrders.map((order) => {
+      const memberId = getMemberId(order);
+      const amount = getOrderAmount(order);
+
+      if (!summaryByMember[memberId]) {
+        summaryByMember[memberId] = {
+          memberId,
+          orderCount: 0,
+          totalAmount: 0
+        };
+      }
+
+      summaryByMember[memberId].orderCount += 1;
+      summaryByMember[memberId].totalAmount += amount;
+
+      return {
+        orderNo: getOrderNo(order),
+        memberId,
+        amount,
+        status: getOrderStatus(order),
+        orderDate: getOrderDate(order)
+      };
+    });
+
+    const totalAmount = Object.values(summaryByMember).reduce(
+      (sum, row) => sum + row.totalAmount,
+      0
+    );
+
+    const totalOrderCount = Object.values(summaryByMember).reduce(
+      (sum, row) => sum + row.orderCount,
+      0
+    );
+
     return res.status(200).json({
       ok: true,
-      message: '아임웹 access token 발급 성공',
-      method: successMethod,
-      tokenPreview: accessToken.slice(0, 8) + '...',
-      keyLength: API_KEY.length,
-      secretLength: SECRET_KEY.length
+      period: {
+        days: 30,
+        orderDateFrom,
+        orderDateTo
+      },
+      allowedMemberIds,
+      total: {
+        orderCount: totalOrderCount,
+        amount: totalAmount
+      },
+      summaryByMember: Object.values(summaryByMember),
+      orders: orderList,
+      debug: {
+        fetchedOrderCount: orders.length,
+        filteredOrderCount: filteredOrders.length,
+        sampleOrderKeys: orders[0] ? Object.keys(orders[0]) : [],
+        sampleOrder: orders[0] || null
+      }
     });
   } catch (error) {
     return res.status(500).json({
       ok: false,
-      message: '토큰 테스트 중 오류가 발생했습니다.',
+      message: '주문 데이터 조회 중 오류가 발생했습니다.',
       error: error.message
     });
   }
