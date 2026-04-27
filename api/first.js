@@ -1,6 +1,36 @@
 export default async function handler(req, res) {
   try {
-res.setHeader(
+const referer = req.headers.referer || '';
+const origin = req.headers.origin || '';
+
+// 허용할 도메인
+const allowedDomains = [
+  'fldup.com',
+  'www.fldup.com',
+  'seowaa.imweb.me'
+];
+
+// referer 검사
+const isAllowed = allowedDomains.some(domain =>
+  referer.includes(domain) || origin.includes(domain)
+);
+
+// 허용되지 않은 접근 차단
+if (!isAllowed) {
+  return res.status(403).send(`
+    <div style="
+      font-family:sans-serif;
+      padding:40px;
+      text-align:center;
+      color:#111;
+    ">
+      <h2>접근이 제한된 페이지입니다</h2>
+      <p>정상적인 경로를 통해 접속해주세요.</p>
+    </div>
+  `);
+}
+    
+    res.setHeader(
   'Content-Security-Policy',
   "frame-ancestors 'self' https://fldup.com https://www.fldup.com https://seowaa.imweb.me"
 );
