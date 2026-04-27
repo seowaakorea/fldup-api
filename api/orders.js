@@ -1,26 +1,14 @@
 export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Vary', 'Origin');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   try {
-    const allowedOrigins = [
-      'https://fldup.com',
-      'https://www.fldup.com',
-      'https://seowaa.imweb.me'
-    ];
-
-    const origin = req.headers.origin;
-
-    if (allowedOrigins.includes(origin)) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
-    } else {
-      res.setHeader('Access-Control-Allow-Origin', 'https://fldup.com');
-    }
-
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-    if (req.method === 'OPTIONS') {
-      return res.status(200).end();
-    }
-
     const API_KEY = (process.env.IMWEB_API_KEY || '').trim();
     const SECRET_KEY = (process.env.IMWEB_SECRET_KEY || '').trim();
 
@@ -49,9 +37,7 @@ export default async function handler(req, res) {
 
     const tokenRes = await fetch(tokenUrl, {
       method: 'GET',
-      headers: {
-        Accept: 'application/json'
-      }
+      headers: { Accept: 'application/json' }
     });
 
     const tokenData = await tokenRes.json();
@@ -110,40 +96,6 @@ export default async function handler(req, res) {
       });
     }
 
-    function getOrderProducts(order) {
-      const candidates =
-        order.items ||
-        order.order_items ||
-        order.products ||
-        order.prod_list ||
-        order.product_list ||
-        order.goods ||
-        [];
-
-      if (!Array.isArray(candidates)) return [];
-
-      return candidates.map(function (item) {
-        return {
-          name:
-            item.name ||
-            item.prod_name ||
-            item.product_name ||
-            item.goods_name ||
-            '-',
-          count:
-            item.count ||
-            item.quantity ||
-            item.order_count ||
-            1,
-          price:
-            item.price ||
-            item.sale_price ||
-            item.total_price ||
-            0
-        };
-      });
-    }
-
     const filteredOrders = orders.filter(function (order) {
       const memberCode = order.orderer?.member_code || '';
       return !!getTargetMemberByCode(memberCode);
@@ -164,9 +116,7 @@ export default async function handler(req, res) {
     const orderList = filteredOrders.map(function (order) {
       const memberCode = order.orderer?.member_code || '';
       const target = getTargetMemberByCode(memberCode);
-
       const amount = Number(order.payment?.payment_amount || 0);
-      const productItems = getOrderProducts(order);
 
       if (summaryMap[memberCode]) {
         summaryMap[memberCode].orderCount += 1;
@@ -190,12 +140,7 @@ export default async function handler(req, res) {
         orderTime: order.order_time || 0,
         completeTime: order.complete_time || 0,
         device: order.device?.type || '',
-        products: productItems,
-        productSummary: productItems.length
-          ? productItems.map(function (p) {
-              return p.name + ' x ' + p.count;
-            }).join(', ')
-          : '-'
+        productSummary: '-'
       };
     });
 
@@ -223,7 +168,6 @@ export default async function handler(req, res) {
       debug: {
         fetchedOrderCount: orders.length,
         filteredOrderCount: filteredOrders.length,
-        sampleOrderKeys: orders[0] ? Object.keys(orders[0]) : [],
         note: '현재는 테스트용 member_code 기준 필터링입니다.'
       }
     });
