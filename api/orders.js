@@ -18,8 +18,6 @@ export default async function handler(req, res) {
       });
     }
 
-    const allowedMemberIds = ['yxxnpd', 'seowaa'];
-
     const tokenUrl =
       `https://api.imweb.me/v2/auth?key=${encodeURIComponent(API_KEY)}&secret=${encodeURIComponent(SECRET_KEY)}`;
 
@@ -80,141 +78,98 @@ export default async function handler(req, res) {
 
     const orders = Array.isArray(rawOrders) ? rawOrders : [];
 
-    function getMemberId(order) {
-      return (
-        order.member_id ||
-        order.memberId ||
-        order.user_id ||
-        order.userId ||
-        order.member?.id ||
-        order.member?.member_id ||
-        order.orderer?.member_id ||
-        order.orderer?.id ||
-        order.buyer?.member_id ||
-        order.buyer?.id ||
-        ''
-      );
-    }
+    const orderers = orders.map((order) => {
+      return {
+        orderNo:
+          order.order_no ||
+          order.orderNo ||
+          order.order_code ||
+          order.orderCode ||
+          '',
 
-    function getOrderAmount(order) {
-      return Number(
-        order.actual_payment_price ||
-        order.payment_price ||
-        order.total_price ||
-        order.order_price ||
-        order.price ||
-        order.pay_price ||
-        0
-      );
-    }
+        orderCode:
+          order.order_code ||
+          order.orderCode ||
+          '',
 
-    function getOrderNo(order) {
-      return (
-        order.order_no ||
-        order.orderNo ||
-        order.order_code ||
-        order.orderCode ||
-        order.no ||
-        order.uid ||
-        ''
-      );
-    }
+        orderTime:
+          order.order_time ||
+          order.order_date ||
+          order.created_at ||
+          '',
 
-    function getOrderStatus(order) {
-      return (
-        order.status ||
-        order.order_status ||
-        order.orderStatus ||
-        order.payment_status ||
-        ''
-      );
-    }
+        memberCode:
+          order.orderer?.member_code || '',
 
-    function getOrderDate(order) {
-      return (
-        order.order_time ||
-        order.order_date ||
-        order.orderDate ||
-        order.created_at ||
-        order.createdAt ||
-        ''
-      );
-    }
+        name:
+          order.orderer?.name || '',
 
-    const filteredOrders = orders.filter((order) => {
-      const memberId = getMemberId(order);
-      return allowedMemberIds.includes(memberId);
-    });
+        email:
+          order.orderer?.email || '',
 
-    const summaryByMember = {};
+        phone:
+          order.orderer?.call || '',
 
-    allowedMemberIds.forEach((id) => {
-      summaryByMember[id] = {
-        memberId: id,
-        orderCount: 0,
-        totalAmount: 0
+        payType:
+          order.payment?.pay_type || '',
+
+        totalPrice:
+          Number(order.payment?.total_price || 0),
+
+        paymentAmount:
+          Number(order.payment?.payment_amount || 0),
+
+        paymentTime:
+          order.payment?.payment_time || '',
+
+        completeTime:
+          order.complete_time || 0
       };
     });
 
-    const orderList = filteredOrders.map((order) => {
-      const memberId = getMemberId(order);
-      const amount = getOrderAmount(order);
+    const uniqueOrderersMap = {};
 
-      if (!summaryByMember[memberId]) {
-        summaryByMember[memberId] = {
-          memberId,
+    orderers.forEach((row) => {
+      const key = row.memberCode || row.email || row.name || 'unknown';
+
+      if (!uniqueOrderersMap[key]) {
+        uniqueOrderersMap[key] = {
+          memberCode: row.memberCode,
+          name: row.name,
+          email: row.email,
+          phone: row.phone,
           orderCount: 0,
-          totalAmount: 0
+          totalPaymentAmount: 0,
+          lastOrderNo: '',
+          lastOrderTime: ''
         };
       }
 
-      summaryByMember[memberId].orderCount += 1;
-      summaryByMember[memberId].totalAmount += amount;
-
-      return {
-        orderNo: getOrderNo(order),
-        memberId,
-        amount,
-        status: getOrderStatus(order),
-        orderDate: getOrderDate(order)
-      };
+      uniqueOrderersMap[key].orderCount += 1;
+      uniqueOrderersMap[key].totalPaymentAmount += row.paymentAmount;
+      uniqueOrderersMap[key].lastOrderNo = row.orderNo;
+      uniqueOrderersMap[key].lastOrderTime = row.orderTime;
     });
-
-    const totalAmount = Object.values(summaryByMember).reduce(
-      (sum, row) => sum + row.totalAmount,
-      0
-    );
-
-    const totalOrderCount = Object.values(summaryByMember).reduce(
-      (sum, row) => sum + row.orderCount,
-      0
-    );
 
     return res.status(200).json({
       ok: true,
+      mode: 'member_code_check',
+      message: '최근 30일 주문자 member_code 확인용 응답입니다.',
       period: {
         days: 30,
         orderDateFrom,
         orderDateTo
       },
-      allowedMemberIds,
-      total: {
-        orderCount: totalOrderCount,
-        amount: totalAmount
-      },
-      summaryByMember: Object.values(summaryByMember),
-      orders: orderList,
       debug: {
-        fetchedOrderCount: orders.length,
-        filteredOrderCount: filteredOrders.length,
-        sampleOrderKeys: orders[0] ? Object.keys(orders[0]) : [],
-        sampleOrder: orders[0] || null
-      }
+        fetchedOrderCount: orders.length
+      },
+      uniqueOrderers: Object.values(uniqueOrderersMap),
+      orders: orderers
     });
   } catch (error) {
     return res.status(500).json({
       ok: false,
-      message: '주문 데이터 조회 중 오류가 발생했습니다.',
+      message: '주문자 member_code 확인 중 오류가 발생했습니다.',
       error: error.message
     });
   }
