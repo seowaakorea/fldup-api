@@ -121,22 +121,59 @@ export default async function handler(req, res) {
         .replace(/'/g, '&#039;');
     }
 
-    function isCanceledOrder(order) {
-      const amount = Number(order.payment?.payment_amount || 0);
-      const paymentTime = Number(order.payment?.payment_time || 0);
+    async function getProdOrderStatus(orderNo) {
+      const url =
+        `https://api.imweb.me/v2/shop/prod-orders` +
+        `?order_no=${encodeURIComponent(orderNo)}` +
+        `&order_version=v2`;
 
-      const rawText = JSON.stringify(order).toLowerCase();
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          'access-token': accessToken
+        }
+      });
 
-      const hasCancelKeyword =
-        rawText.includes('cancel') ||
-        rawText.includes('refund') ||
-        rawText.includes('return') ||
-        rawText.includes('취소') ||
-        rawText.includes('환불') ||
-        rawText.includes('반품');
+      const data = await response.json();
 
-      return amount <= 0 || paymentTime <= 0 || hasCancelKeyword;
+      const statuses = [];
+
+      const root = data?.data?.[orderNo];
+
+      if (root && typeof root === 'object') {
+        Object.values(root).forEach(prodOrder => {
+          if (!prodOrder || typeof prodOrder !== 'object') return;
+
+          statuses.push({
+            prodOrderNo: prodOrder.order_no || '',
+            status: prodOrder.status || '',
+            rawStatus: prodOrder.status || '',
+            itemNames: Array.isArray(prodOrder.items)
+              ? prodOrder.items.map(item => item.prod_name).filter(Boolean)
+              : []
+          });
+        });
+      }
+
+      return {
+        orderNo,
+        statuses,
+        isCanceled: statuses.some(row => {
+          const status = String(row.status || '').toUpperCase();
+          return (
+            status.includes('CANCEL') ||
+            status.includes('REFUND') ||
+            status.includes('RETURN')
+          );
+        })
+      };
     }
+
+    const targetOrders = orders.filter(order => {
+      const memberCode = order.orderer?.member_code || '';
+      return !!getTargetMemberByCode(memberCode);
+    });
 
     const summaryMap = {};
 
@@ -153,48 +190,68 @@ export default async function handler(req, res) {
       };
     });
 
-    const filteredOrders = orders
-      .filter(order => {
-        const memberCode = order.orderer?.member_code || '';
-        return !!getTargetMemberByCode(memberCode);
-      })
-      .map(order => {
-        const memberCode = order.orderer?.member_code || '';
-        const target = getTargetMemberByCode(memberCode);
+    const orderRows = [];
 
-        const amount = Number(order.payment?.payment_amount || 0);
-        const canceled = isCanceledOrder(order);
+    for (const order of targetOrders) {
+      const memberCode = order.orderer?.member_code || '';
+      const target = getTargetMemberByCode(memberCode);
+      const amount = Number(order.payment?.payment_amount || 0);
+      const orderNo = order.order_no || order.order_code || '';
 
-        if (summaryMap[memberCode]) {
-          summaryMap[memberCode].totalOrderCount += 1;
+      let prodStatusInfo = {
+        isCanceled: false,
+        statuses: []
+      };
 
-          if (canceled) {
-            summaryMap[memberCode].cancelOrderCount += 1;
-            summaryMap[memberCode].cancelAmount += amount;
-          } else {
-            summaryMap[memberCode].normalOrderCount += 1;
-            summaryMap[memberCode].normalAmount += amount;
-          }
-        }
-
-        return {
-          orderNo: order.order_no || order.order_code || '',
-          orderCode: order.order_code || '',
-          name: target?.displayName || order.orderer?.name || '',
-          ordererName: order.orderer?.name || '',
-          memberId: target?.memberId || '',
-          memberCode,
-          amount,
-          totalProductPrice: Number(order.payment?.total_price || 0),
-          deliveryPrice: Number(order.payment?.deliv_price || 0),
-          payType: order.payment?.pay_type || '',
-          paymentTime: Number(order.payment?.payment_time || 0),
-          orderTime: Number(order.order_time || 0),
-          completeTime: Number(order.complete_time || 0),
-          device: order.device?.type || '',
-          status: canceled ? '취소/환불 추정' : '정상'
+      try {
+        prodStatusInfo = await getProdOrderStatus(orderNo);
+      } catch (statusError) {
+        prodStatusInfo = {
+          isCanceled: false,
+          statuses: [],
+          error: statusError.message
         };
+      }
+
+      const canceled = prodStatusInfo.isCanceled;
+
+      if (summaryMap[memberCode]) {
+        summaryMap[memberCode].totalOrderCount += 1;
+
+        if (canceled) {
+          summaryMap[memberCode].cancelOrderCount += 1;
+          summaryMap[memberCode].cancelAmount += amount;
+        } else {
+          summaryMap[memberCode].normalOrderCount += 1;
+          summaryMap[memberCode].normalAmount += amount;
+        }
+      }
+
+      const productSummary = prodStatusInfo.statuses
+        .flatMap(row => row.itemNames || [])
+        .filter(Boolean)
+        .join(', ') || '-';
+
+      orderRows.push({
+        orderNo,
+        orderCode: order.order_code || '',
+        name: target?.displayName || order.orderer?.name || '',
+        ordererName: order.orderer?.name || '',
+        memberId: target?.memberId || '',
+        memberCode,
+        amount,
+        totalProductPrice: Number(order.payment?.total_price || 0),
+        deliveryPrice: Number(order.payment?.deliv_price || 0),
+        payType: order.payment?.pay_type || '',
+        paymentTime: Number(order.payment?.payment_time || 0),
+        orderTime: Number(order.order_time || 0),
+        completeTime: Number(order.complete_time || 0),
+        device: order.device?.type || '',
+        status: canceled ? '취소/환불' : '정상',
+        productSummary,
+        prodOrderStatuses: prodStatusInfo.statuses
       });
+    }
 
     const summary = Object.values(summaryMap);
 
@@ -214,21 +271,22 @@ export default async function handler(req, res) {
       </tr>
     `).join('');
 
-    const orderRows = filteredOrders.length
-      ? filteredOrders.map(order => `
-        <tr class="${order.status === '취소/환불 추정' ? 'is-cancel' : ''}">
+    const recentOrderRows = orderRows.length
+      ? orderRows.map(order => `
+        <tr class="${order.status === '취소/환불' ? 'is-cancel' : ''}">
           <td>${escapeHtml(order.orderNo)}</td>
           <td>${escapeHtml(order.name)}</td>
+          <td>${escapeHtml(order.productSummary)}</td>
           <td>${won(order.amount)}</td>
           <td>${dateText(order.orderTime)}</td>
           <td>
-            <span class="status ${order.status === '취소/환불 추정' ? 'cancel-badge' : 'normal-badge'}">
+            <span class="status ${order.status === '취소/환불' ? 'cancel-badge' : 'normal-badge'}">
               ${order.status}
             </span>
           </td>
         </tr>
       `).join('')
-      : `<tr><td colspan="5" class="empty">최근 주문 내역이 없습니다.</td></tr>`;
+      : `<tr><td colspan="6" class="empty">최근 주문 내역이 없습니다.</td></tr>`;
 
     const html = `<!doctype html>
 <html lang="ko">
@@ -361,7 +419,7 @@ export default async function handler(req, res) {
   table{
     width:100%;
     border-collapse:collapse;
-    min-width:860px;
+    min-width:980px;
   }
 
   th,td{
@@ -485,7 +543,7 @@ export default async function handler(req, res) {
     </div>
 
     <div class="notice">
-      정상 매출은 취소/환불로 추정되는 주문을 제외한 금액입니다. 현재 취소 여부는 결제금액, 결제시각, 주문 원본 데이터의 취소/환불 키워드를 기준으로 판별합니다.
+      정상 매출은 품목 주문 API의 상태값 기준으로 취소/환불 주문을 제외한 금액입니다. 품목 주문 상태가 CANCEL, REFUND, RETURN 계열이면 취소/환불로 분류합니다.
     </div>
 
     <div class="section">
@@ -515,12 +573,13 @@ export default async function handler(req, res) {
             <tr>
               <th>주문번호</th>
               <th>고객명</th>
+              <th>주문상품</th>
               <th>주문금액</th>
               <th>주문일</th>
               <th>상태</th>
             </tr>
           </thead>
-          <tbody>${orderRows}</tbody>
+          <tbody>${recentOrderRows}</tbody>
         </table>
       </div>
     </div>
@@ -535,7 +594,7 @@ export default async function handler(req, res) {
     return res.status(500).send(`
       <div style="font-family:sans-serif;padding:30px;color:#111;">
         <h2>데이터 조회 오류</h2>
-        <p>${escapeHtml(err.message)}</p>
+        <p>${String(err.message || '').replace(/</g, '&lt;')}</p>
       </div>
     `);
   }
