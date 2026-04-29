@@ -199,9 +199,21 @@ async function fetchProducts() {
 
     const productMap = await fetchProducts();
 
-    const now = new Date();
-    const from = new Date();
-    from.setDate(now.getDate() - 30);
+   let fromDate;
+let toDate;
+
+if (req.query.from && req.query.to) {
+  fromDate = new Date(req.query.from + 'T00:00:00');
+  toDate = new Date(req.query.to + 'T23:59:59');
+} else {
+  const now = new Date();
+  fromDate = new Date();
+  fromDate.setDate(now.getDate() - 30);
+  toDate = now;
+}
+
+const orderDateFrom = Math.floor(fromDate.getTime() / 1000);
+const orderDateTo = Math.floor(toDate.getTime() / 1000);
 
     const orderDateFrom = Math.floor(from.getTime() / 1000);
     const orderDateTo = Math.floor(now.getTime() / 1000);
