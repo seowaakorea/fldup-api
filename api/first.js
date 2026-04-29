@@ -33,6 +33,60 @@ export default async function handler(req, res) {
       throw new Error('Vercel 환경변수 IMWEB_API_KEY 또는 IMWEB_SECRET_KEY가 없습니다.');
     }
 
+    function escapeHtml(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function won(num) {
+      return Number(num || 0).toLocaleString('ko-KR') + '원';
+    }
+
+    function toDateInputValue(date) {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, '0');
+      const d = String(date.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+
+    function dateText(value) {
+      if (!value) return '-';
+      const date = new Date(Number(value) * 1000);
+      if (isNaN(date.getTime())) return '-';
+      return toDateInputValue(date);
+    }
+
+    function getQueryStringValue(value) {
+      if (Array.isArray(value)) return value[0] || '';
+      return value || '';
+    }
+
+    const queryFrom = getQueryStringValue(req.query.from);
+    const queryTo = getQueryStringValue(req.query.to);
+
+    let fromDate;
+    let toDate;
+
+    if (queryFrom && queryTo) {
+      fromDate = new Date(`${queryFrom}T00:00:00+09:00`);
+      toDate = new Date(`${queryTo}T23:59:59+09:00`);
+    } else {
+      toDate = new Date();
+      fromDate = new Date();
+      fromDate.setDate(toDate.getDate() - 30);
+    }
+
+    if (isNaN(fromDate.getTime()) || isNaN(toDate.getTime())) {
+      throw new Error('기간 형식이 올바르지 않습니다.');
+    }
+
+    const selectedFrom = queryFrom || toDateInputValue(fromDate);
+    const selectedTo = queryTo || toDateInputValue(toDate);
+
     const tokenUrl =
       `https://api.imweb.me/v2/auth?key=${encodeURIComponent(API_KEY)}&secret=${encodeURIComponent(SECRET_KEY)}`;
 
@@ -53,28 +107,6 @@ export default async function handler(req, res) {
 
     if (!accessToken) {
       throw new Error('아임웹 access token 발급 실패');
-    }
-
-    function escapeHtml(value) {
-      return String(value || '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-    }
-
-    function won(num) {
-      return Number(num || 0).toLocaleString('ko-KR') + '원';
-    }
-
-    function dateText(value) {
-      if (!value) return '-';
-
-      const date = new Date(Number(value) * 1000);
-      if (isNaN(date.getTime())) return '-';
-
-      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
     }
 
     async function apiGet(url) {
@@ -102,41 +134,39 @@ export default async function handler(req, res) {
       return data;
     }
 
-async function fetchProducts() {
-  const productMap = {};
-  const LIMIT = 100;
-  let offset = 0;
+    async function fetchProducts() {
+      const productMap = {};
+      const LIMIT = 100;
+      let offset = 0;
 
-  while (true) {
-    const url = `https://api.imweb.me/v2/shop/products?limit=${LIMIT}&offset=${offset}`;
+      while (true) {
+        const url = `https://api.imweb.me/v2/shop/products?limit=${LIMIT}&offset=${offset}`;
+        const data = await apiGet(url);
 
-    const data = await apiGet(url);
+        const list =
+          data?.data?.list ||
+          data?.data?.products ||
+          data?.list ||
+          data?.products ||
+          [];
 
-    const list =
-      data?.data?.list ||
-      data?.data?.products ||
-      data?.list ||
-      data?.products ||
-      [];
+        if (!Array.isArray(list) || list.length === 0) {
+          break;
+        }
 
-    if (!Array.isArray(list) || list.length === 0) {
-      break;
-    }
+        list.forEach(product => {
+          if (product && product.no) {
+            productMap[String(product.no)] = product;
+          }
+        });
 
-    list.forEach(product => {
-      if (product && product.no) {
-        productMap[String(product.no)] = product;
+        offset += LIMIT;
+
+        if (offset > 3000) break;
       }
-    });
 
-    offset += LIMIT;
-
-    // 안전장치 (무한루프 방지)
-    if (offset > 2000) break;
-  }
-
-  return productMap;
-}
+      return productMap;
+    }
 
     async function getProdOrderStatus(orderNo) {
       const url =
@@ -199,24 +229,8 @@ async function fetchProducts() {
 
     const productMap = await fetchProducts();
 
-   let fromDate;
-let toDate;
-
-if (req.query.from && req.query.to) {
-  fromDate = new Date(req.query.from + 'T00:00:00');
-  toDate = new Date(req.query.to + 'T23:59:59');
-} else {
-  const now = new Date();
-  fromDate = new Date();
-  fromDate.setDate(now.getDate() - 30);
-  toDate = now;
-}
-
-const orderDateFrom = Math.floor(fromDate.getTime() / 1000);
-const orderDateTo = Math.floor(toDate.getTime() / 1000);
-
-    const orderDateFrom = Math.floor(from.getTime() / 1000);
-    const orderDateTo = Math.floor(now.getTime() / 1000);
+    const orderDateFrom = Math.floor(fromDate.getTime() / 1000);
+    const orderDateTo = Math.floor(toDate.getTime() / 1000);
 
     const ordersUrl =
       `https://api.imweb.me/v2/shop/orders` +
@@ -268,7 +282,7 @@ const orderDateTo = Math.floor(toDate.getTime() / 1000);
 
       if (!summaryMap[memberCode]) {
         summaryMap[memberCode] = {
-          memberId: order.orderer?.member_code || 'guest',
+          memberId: memberCode,
           displayName: ordererName,
           memberCode,
           normalOrderCount: 0,
@@ -381,7 +395,7 @@ const orderDateTo = Math.floor(toDate.getTime() / 1000);
     justify-content:space-between;
     gap:20px;
     align-items:flex-end;
-    margin-bottom:28px;
+    margin-bottom:24px;
   }
 
   .kicker{
@@ -415,6 +429,45 @@ const orderDateTo = Math.floor(toDate.getTime() / 1000);
     text-decoration:none;
     border-radius:10px;
     padding:14px 20px;
+    font-size:14px;
+    font-weight:800;
+    cursor:pointer;
+  }
+
+  .date-filter{
+    display:flex;
+    gap:10px;
+    margin:0 0 20px;
+    align-items:center;
+    flex-wrap:wrap;
+    padding:16px;
+    background:#fff7f1;
+    border:1px solid #ffd6bd;
+    border-radius:14px;
+  }
+
+  .date-filter label{
+    font-size:13px;
+    font-weight:800;
+    color:#8a3a00;
+  }
+
+  .date-filter input{
+    height:42px;
+    padding:0 12px;
+    border:1px solid #ddd;
+    border-radius:8px;
+    font-size:14px;
+    background:#fff;
+  }
+
+  .date-filter button{
+    height:42px;
+    background:#ff7a00;
+    color:#fff;
+    border:0;
+    padding:0 18px;
+    border-radius:8px;
     font-size:14px;
     font-weight:800;
     cursor:pointer;
@@ -454,34 +507,6 @@ const orderDateTo = Math.floor(toDate.getTime() / 1000);
   .card.cancel-card strong{
     color:#d93025;
   }
-
-.date-filter{
-  display:flex;
-  gap:10px;
-  margin:0 0 20px;
-  align-items:center;
-  flex-wrap:wrap;
-}
-
-.date-filter input{
-  height:42px;
-  padding:0 12px;
-  border:1px solid #ddd;
-  border-radius:8px;
-  font-size:14px;
-}
-
-.date-filter button{
-  height:42px;
-  background:#ff7a00;
-  color:#fff;
-  border:0;
-  padding:0 18px;
-  border-radius:8px;
-  font-size:14px;
-  font-weight:800;
-  cursor:pointer;
-}
 
   .notice{
     margin:0 0 20px;
@@ -675,6 +700,9 @@ const orderDateTo = Math.floor(toDate.getTime() / 1000);
     .summary{ grid-template-columns:1fr 1fr; gap:12px; }
     .card,.section{ padding:18px; border-radius:14px; }
     .card strong{ font-size:24px; }
+    .date-filter{ align-items:flex-start; }
+    .date-filter input{ width:100%; box-sizing:border-box; }
+    .date-filter button{ width:100%; }
   }
 </style>
 </head>
@@ -687,6 +715,14 @@ const orderDateTo = Math.floor(toDate.getTime() / 1000);
         <p class="desc">부자재 카테고리 주문 건수와 매출을 확인할 수 있습니다.</p>
       </div>
       <button class="refresh" type="button" onclick="window.location.reload()">새로고침</button>
+    </div>
+
+    <div class="date-filter">
+      <label>조회기간</label>
+      <input type="date" id="fromDate" value="${escapeHtml(selectedFrom)}">
+      <span>~</span>
+      <input type="date" id="toDate" value="${escapeHtml(selectedTo)}">
+      <button type="button" onclick="applyFilter()">조회</button>
     </div>
 
     <div class="summary">
@@ -707,13 +743,6 @@ const orderDateTo = Math.floor(toDate.getTime() / 1000);
         <strong>${won(totalCancelAmount)}</strong>
       </div>
     </div>
-
-    <div class="date-filter">
-  <input type="date" id="fromDate" value="${escapeHtml(req.query.from || '')}">
-  <span>~</span>
-  <input type="date" id="toDate" value="${escapeHtml(req.query.to || '')}">
-  <button type="button" onclick="applyFilter()">조회</button>
-</div>
 
     <div class="notice">
       현재 부자재 집계 기준 카테고리 코드는 <strong>${SUPPLY_CATEGORY_CODE}</strong>입니다.
@@ -772,17 +801,17 @@ const orderDateTo = Math.floor(toDate.getTime() / 1000);
 <script>
   const ORDER_DETAILS = ${orderDetailsJson};
 
-function applyFilter(){
-  const from = document.getElementById('fromDate').value;
-  const to = document.getElementById('toDate').value;
+  function applyFilter(){
+    const from = document.getElementById('fromDate').value;
+    const to = document.getElementById('toDate').value;
 
-  if(!from || !to){
-    alert('기간을 선택해주세요.');
-    return;
+    if(!from || !to){
+      alert('기간을 선택해주세요.');
+      return;
+    }
+
+    window.location.href = '/api/first?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to);
   }
-
-  window.location.href = '/api/first?from=' + from + '&to=' + to;
-}
 
   function won(num){
     return Number(num || 0).toLocaleString('ko-KR') + '원';
