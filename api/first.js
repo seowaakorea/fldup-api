@@ -6,7 +6,8 @@ export default async function handler(req, res) {
     const allowedDomains = [
       'fldup.com',
       'www.fldup.com',
-      'seowaa.imweb.me'
+      'seowaa.imweb.me',
+      'fldup-api.vercel.app'
     ];
 
     const isAllowed = allowedDomains.some(domain =>
@@ -27,6 +28,10 @@ export default async function handler(req, res) {
 
     const API_KEY = (process.env.IMWEB_API_KEY || '').trim();
     const SECRET_KEY = (process.env.IMWEB_SECRET_KEY || '').trim();
+
+    if (!API_KEY || !SECRET_KEY) {
+      throw new Error('Vercel 환경변수 IMWEB_API_KEY 또는 IMWEB_SECRET_KEY가 없습니다.');
+    }
 
     const tokenUrl =
       `https://api.imweb.me/v2/auth?key=${encodeURIComponent(API_KEY)}&secret=${encodeURIComponent(SECRET_KEY)}`;
@@ -65,6 +70,7 @@ export default async function handler(req, res) {
 
     function dateText(value) {
       if (!value) return '-';
+
       const date = new Date(Number(value) * 1000);
       if (isNaN(date.getTime())) return '-';
 
@@ -80,14 +86,27 @@ export default async function handler(req, res) {
         }
       });
 
-      return response.json();
+      const text = await response.text();
+
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        throw new Error(`API JSON 파싱 실패: ${url}`);
+      }
+
+      if (!response.ok) {
+        throw new Error(`API 요청 실패: ${response.status} / ${url}`);
+      }
+
+      return data;
     }
 
     async function fetchProducts() {
       const productMap = {};
-      const pagesToTry = [1, 2, 3, 4, 5, 6, 7, 8];
+      const maxPages = 10;
 
-      for (const page of pagesToTry) {
+      for (let page = 1; page <= maxPages; page++) {
         const url = `https://api.imweb.me/v2/shop/products?page=${page}`;
         const data = await apiGet(url);
 
@@ -100,7 +119,7 @@ export default async function handler(req, res) {
 
         if (!Array.isArray(list) || list.length === 0) {
           if (page === 1) {
-            continue;
+            throw new Error('상품 목록을 불러오지 못했습니다.');
           }
           break;
         }
@@ -383,11 +402,13 @@ export default async function handler(req, res) {
     justify-content:center;
     background:#ff7a00;
     color:#fff;
+    border:0;
     text-decoration:none;
     border-radius:10px;
     padding:14px 20px;
     font-size:14px;
     font-weight:800;
+    cursor:pointer;
   }
 
   .summary{
@@ -628,7 +649,7 @@ export default async function handler(req, res) {
         <h1>부자재 매출 확인</h1>
         <p class="desc">부자재 카테고리 주문 건수와 매출을 확인할 수 있습니다.</p>
       </div>
-      <a class="refresh" href="/api/first">새로고침</a>
+      <button class="refresh" type="button" onclick="window.location.reload()">새로고침</button>
     </div>
 
     <div class="summary">
@@ -651,7 +672,8 @@ export default async function handler(req, res) {
     </div>
 
     <div class="notice">
-      현재 부자재 집계 기준 카테고리 코드는 <strong>${SUPPLY_CATEGORY_CODE}</strong>입니다. 정상 매출은 품목 주문 상태가 CANCEL, REFUND, RETURN 계열인 주문을 제외한 금액입니다.
+      현재 부자재 집계 기준 카테고리 코드는 <strong>${SUPPLY_CATEGORY_CODE}</strong>입니다.
+      정상 매출은 품목 주문 상태가 CANCEL, REFUND, RETURN 계열인 주문을 제외한 금액입니다.
     </div>
 
     <div class="section">
