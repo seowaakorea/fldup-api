@@ -455,6 +455,34 @@ const orderDateTo = Math.floor(toDate.getTime() / 1000);
     color:#d93025;
   }
 
+.date-filter{
+  display:flex;
+  gap:10px;
+  margin:0 0 20px;
+  align-items:center;
+  flex-wrap:wrap;
+}
+
+.date-filter input{
+  height:42px;
+  padding:0 12px;
+  border:1px solid #ddd;
+  border-radius:8px;
+  font-size:14px;
+}
+
+.date-filter button{
+  height:42px;
+  background:#ff7a00;
+  color:#fff;
+  border:0;
+  padding:0 18px;
+  border-radius:8px;
+  font-size:14px;
+  font-weight:800;
+  cursor:pointer;
+}
+
   .notice{
     margin:0 0 20px;
     padding:15px 17px;
@@ -680,6 +708,13 @@ const orderDateTo = Math.floor(toDate.getTime() / 1000);
       </div>
     </div>
 
+    <div class="date-filter">
+  <input type="date" id="fromDate" value="${escapeHtml(req.query.from || '')}">
+  <span>~</span>
+  <input type="date" id="toDate" value="${escapeHtml(req.query.to || '')}">
+  <button type="button" onclick="applyFilter()">조회</button>
+</div>
+
     <div class="notice">
       현재 부자재 집계 기준 카테고리 코드는 <strong>${SUPPLY_CATEGORY_CODE}</strong>입니다.
       정상 매출은 품목 주문 상태가 CANCEL, REFUND, RETURN 계열인 주문을 제외한 금액입니다.
@@ -736,6 +771,18 @@ const orderDateTo = Math.floor(toDate.getTime() / 1000);
 
 <script>
   const ORDER_DETAILS = ${orderDetailsJson};
+
+function applyFilter(){
+  const from = document.getElementById('fromDate').value;
+  const to = document.getElementById('toDate').value;
+
+  if(!from || !to){
+    alert('기간을 선택해주세요.');
+    return;
+  }
+
+  window.location.href = '/api/first?from=' + from + '&to=' + to;
+}
 
   function won(num){
     return Number(num || 0).toLocaleString('ko-KR') + '원';
