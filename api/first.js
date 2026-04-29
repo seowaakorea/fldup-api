@@ -102,44 +102,41 @@ export default async function handler(req, res) {
       return data;
     }
 
-    async function fetchProducts() {
-      const productMap = {};
-      const maxPages = 10;
+async function fetchProducts() {
+  const productMap = {};
+  const LIMIT = 100;
+  let offset = 0;
 
-      for (let page = 1; page <= maxPages; page++) {
-        const url = `https://api.imweb.me/v2/shop/products?page=${page}`;
-        const data = await apiGet(url);
+  while (true) {
+    const url = `https://api.imweb.me/v2/shop/products?limit=${LIMIT}&offset=${offset}`;
 
-        const list =
-          data?.data?.list ||
-          data?.data?.products ||
-          data?.list ||
-          data?.products ||
-          [];
+    const data = await apiGet(url);
 
-        if (!Array.isArray(list) || list.length === 0) {
-          if (page === 1) {
-            throw new Error('상품 목록을 불러오지 못했습니다.');
-          }
-          break;
-        }
+    const list =
+      data?.data?.list ||
+      data?.data?.products ||
+      data?.list ||
+      data?.products ||
+      [];
 
-        list.forEach(product => {
-          if (product && product.no) {
-            productMap[String(product.no)] = product;
-          }
-        });
-
-        const pagenation = data?.data?.pagenation || data?.pagenation;
-        const totalPage = Number(pagenation?.total_page || 0);
-
-        if (totalPage && page >= totalPage) {
-          break;
-        }
-      }
-
-      return productMap;
+    if (!Array.isArray(list) || list.length === 0) {
+      break;
     }
+
+    list.forEach(product => {
+      if (product && product.no) {
+        productMap[String(product.no)] = product;
+      }
+    });
+
+    offset += LIMIT;
+
+    // 안전장치 (무한루프 방지)
+    if (offset > 2000) break;
+  }
+
+  return productMap;
+}
 
     async function getProdOrderStatus(orderNo) {
       const url =
