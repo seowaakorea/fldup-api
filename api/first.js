@@ -23,30 +23,17 @@ export default async function handler(req, res) {
       `);
     }
 
+    const SUPPLY_CATEGORY_CODE = 's202604085049083083214';
+
     const API_KEY = (process.env.IMWEB_API_KEY || '').trim();
     const SECRET_KEY = (process.env.IMWEB_SECRET_KEY || '').trim();
-
-    const targetMembers = [
-      {
-        memberId: 'seowaa',
-        displayName: '서와',
-        memberCode: 'm20251111951335dbfdb68'
-      },
-      {
-        memberId: 'yxxnpd',
-        displayName: '서와주식회사(테스트)',
-        memberCode: 'm20251110646a2d71df48d'
-      }
-    ];
 
     const tokenUrl =
       `https://api.imweb.me/v2/auth?key=${encodeURIComponent(API_KEY)}&secret=${encodeURIComponent(SECRET_KEY)}`;
 
     const tokenRes = await fetch(tokenUrl, {
       method: 'GET',
-      headers: {
-        Accept: 'application/json'
-      }
+      headers: { Accept: 'application/json' }
     });
 
     const tokenData = await tokenRes.json();
@@ -63,55 +50,6 @@ export default async function handler(req, res) {
       throw new Error('아임웹 access token 발급 실패');
     }
 
-    const now = new Date();
-    const from = new Date();
-    from.setDate(now.getDate() - 30);
-
-    const orderDateFrom = Math.floor(from.getTime() / 1000);
-    const orderDateTo = Math.floor(now.getTime() / 1000);
-
-    const ordersUrl =
-      `https://api.imweb.me/v2/shop/orders` +
-      `?order_date_from=${orderDateFrom}` +
-      `&order_date_to=${orderDateTo}`;
-
-    const ordersRes = await fetch(ordersUrl, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json',
-        'access-token': accessToken
-      }
-    });
-
-    const ordersData = await ordersRes.json();
-
-    const rawOrders =
-      ordersData.data?.list ||
-      ordersData.data?.orders ||
-      ordersData.data ||
-      ordersData.list ||
-      ordersData.orders ||
-      [];
-
-    const orders = Array.isArray(rawOrders) ? rawOrders : [];
-
-    function getTargetMemberByCode(memberCode) {
-      return targetMembers.find(member => member.memberCode === memberCode);
-    }
-
-    function won(num) {
-      return Number(num || 0).toLocaleString('ko-KR') + '원';
-    }
-
-    function dateText(value) {
-      if (!value) return '-';
-
-      const date = new Date(Number(value) * 1000);
-      if (isNaN(date.getTime())) return '-';
-
-      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-    }
-
     function escapeHtml(value) {
       return String(value || '')
         .replace(/&/g, '&amp;')
@@ -121,12 +59,19 @@ export default async function handler(req, res) {
         .replace(/'/g, '&#039;');
     }
 
-    async function getProdOrderStatus(orderNo) {
-      const url =
-        `https://api.imweb.me/v2/shop/prod-orders` +
-        `?order_no=${encodeURIComponent(orderNo)}` +
-        `&order_version=v2`;
+    function won(num) {
+      return Number(num || 0).toLocaleString('ko-KR') + '원';
+    }
 
+    function dateText(value) {
+      if (!value) return '-';
+      const date = new Date(Number(value) * 1000);
+      if (isNaN(date.getTime())) return '-';
+
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    }
+
+    async function apiGet(url) {
       const response = await fetch(url, {
         method: 'GET',
         headers: {
@@ -135,23 +80,76 @@ export default async function handler(req, res) {
         }
       });
 
-      const data = await response.json();
+      return response.json();
+    }
+
+    async function fetchProducts() {
+      const productMap = {};
+      const pagesToTry = [1, 2, 3, 4, 5, 6, 7, 8];
+
+      for (const page of pagesToTry) {
+        const url = `https://api.imweb.me/v2/shop/products?page=${page}`;
+        const data = await apiGet(url);
+
+        const list =
+          data?.data?.list ||
+          data?.data?.products ||
+          data?.list ||
+          data?.products ||
+          [];
+
+        if (!Array.isArray(list) || list.length === 0) {
+          if (page === 1) {
+            continue;
+          }
+          break;
+        }
+
+        list.forEach(product => {
+          if (product && product.no) {
+            productMap[String(product.no)] = product;
+          }
+        });
+
+        const pagenation = data?.data?.pagenation || data?.pagenation;
+        const totalPage = Number(pagenation?.total_page || 0);
+
+        if (totalPage && page >= totalPage) {
+          break;
+        }
+      }
+
+      return productMap;
+    }
+
+    async function getProdOrderStatus(orderNo) {
+      const url =
+        `https://api.imweb.me/v2/shop/prod-orders` +
+        `?order_no=${encodeURIComponent(orderNo)}` +
+        `&order_version=v2`;
+
+      const data = await apiGet(url);
 
       const statuses = [];
-
       const root = data?.data?.[orderNo];
 
       if (root && typeof root === 'object') {
         Object.values(root).forEach(prodOrder => {
           if (!prodOrder || typeof prodOrder !== 'object') return;
 
+          const items = Array.isArray(prodOrder.items) ? prodOrder.items : [];
+
           statuses.push({
             prodOrderNo: prodOrder.order_no || '',
             status: prodOrder.status || '',
-            rawStatus: prodOrder.status || '',
-            itemNames: Array.isArray(prodOrder.items)
-              ? prodOrder.items.map(item => item.prod_name).filter(Boolean)
-              : []
+            itemNames: items.map(item => item.prod_name).filter(Boolean),
+            items: items.map(item => ({
+              prodNo: item.prod_no || '',
+              prodName: item.prod_name || '',
+              count: Number(item.payment?.count || 0),
+              price: Number(item.payment?.price || 0),
+              customCode: item.prod_custom_code || null
+            }))
           });
         });
       }
@@ -170,33 +168,53 @@ export default async function handler(req, res) {
       };
     }
 
-    const targetOrders = orders.filter(order => {
-      const memberCode = order.orderer?.member_code || '';
-      return !!getTargetMemberByCode(memberCode);
-    });
+    function isSupplyItem(item, productMap) {
+      const prodNo = String(item.prodNo || item.prod_no || '');
+      const product = productMap[prodNo];
+
+      if (!product) return false;
+
+      const categories = Array.isArray(product.categories)
+        ? product.categories
+        : [];
+
+      return categories.includes(SUPPLY_CATEGORY_CODE);
+    }
+
+    const productMap = await fetchProducts();
+
+    const now = new Date();
+    const from = new Date();
+    from.setDate(now.getDate() - 30);
+
+    const orderDateFrom = Math.floor(from.getTime() / 1000);
+    const orderDateTo = Math.floor(now.getTime() / 1000);
+
+    const ordersUrl =
+      `https://api.imweb.me/v2/shop/orders` +
+      `?order_date_from=${orderDateFrom}` +
+      `&order_date_to=${orderDateTo}`;
+
+    const ordersData = await apiGet(ordersUrl);
+
+    const rawOrders =
+      ordersData.data?.list ||
+      ordersData.data?.orders ||
+      ordersData.data ||
+      ordersData.list ||
+      ordersData.orders ||
+      [];
+
+    const orders = Array.isArray(rawOrders) ? rawOrders : [];
 
     const summaryMap = {};
-
-    targetMembers.forEach(member => {
-      summaryMap[member.memberCode] = {
-        memberId: member.memberId,
-        displayName: member.displayName,
-        memberCode: member.memberCode,
-        normalOrderCount: 0,
-        normalAmount: 0,
-        cancelOrderCount: 0,
-        cancelAmount: 0,
-        totalOrderCount: 0
-      };
-    });
-
     const orderRows = [];
 
-    for (const order of targetOrders) {
-      const memberCode = order.orderer?.member_code || '';
-      const target = getTargetMemberByCode(memberCode);
-      const amount = Number(order.payment?.payment_amount || 0);
+    for (const order of orders) {
       const orderNo = order.order_no || order.order_code || '';
+      const memberCode = order.orderer?.member_code || 'guest';
+      const ordererName = order.orderer?.name || '비회원';
+      const amount = Number(order.payment?.payment_amount || 0);
 
       let prodStatusInfo = {
         isCanceled: false,
@@ -205,51 +223,60 @@ export default async function handler(req, res) {
 
       try {
         prodStatusInfo = await getProdOrderStatus(orderNo);
-      } catch (statusError) {
+      } catch (e) {
         prodStatusInfo = {
           isCanceled: false,
           statuses: [],
-          error: statusError.message
+          error: e.message
+        };
+      }
+
+      const allItems = prodStatusInfo.statuses.flatMap(row => row.items || []);
+      const supplyItems = allItems.filter(item => isSupplyItem(item, productMap));
+
+      if (supplyItems.length === 0) {
+        continue;
+      }
+
+      if (!summaryMap[memberCode]) {
+        summaryMap[memberCode] = {
+          memberId: order.orderer?.member_code || 'guest',
+          displayName: ordererName,
+          memberCode,
+          normalOrderCount: 0,
+          normalAmount: 0,
+          cancelOrderCount: 0,
+          cancelAmount: 0,
+          totalOrderCount: 0
         };
       }
 
       const canceled = prodStatusInfo.isCanceled;
 
-      if (summaryMap[memberCode]) {
-        summaryMap[memberCode].totalOrderCount += 1;
+      summaryMap[memberCode].totalOrderCount += 1;
 
-        if (canceled) {
-          summaryMap[memberCode].cancelOrderCount += 1;
-          summaryMap[memberCode].cancelAmount += amount;
-        } else {
-          summaryMap[memberCode].normalOrderCount += 1;
-          summaryMap[memberCode].normalAmount += amount;
-        }
+      if (canceled) {
+        summaryMap[memberCode].cancelOrderCount += 1;
+        summaryMap[memberCode].cancelAmount += amount;
+      } else {
+        summaryMap[memberCode].normalOrderCount += 1;
+        summaryMap[memberCode].normalAmount += amount;
       }
 
-      const productSummary = prodStatusInfo.statuses
-        .flatMap(row => row.itemNames || [])
-        .filter(Boolean)
+      const productSummary = supplyItems
+        .map(item => `${item.prodName} x ${item.count || 1}`)
         .join(', ') || '-';
 
       orderRows.push({
         orderNo,
         orderCode: order.order_code || '',
-        name: target?.displayName || order.orderer?.name || '',
-        ordererName: order.orderer?.name || '',
-        memberId: target?.memberId || '',
+        name: ordererName,
         memberCode,
         amount,
-        totalProductPrice: Number(order.payment?.total_price || 0),
-        deliveryPrice: Number(order.payment?.deliv_price || 0),
-        payType: order.payment?.pay_type || '',
-        paymentTime: Number(order.payment?.payment_time || 0),
         orderTime: Number(order.order_time || 0),
-        completeTime: Number(order.complete_time || 0),
-        device: order.device?.type || '',
         status: canceled ? '취소/환불' : '정상',
         productSummary,
-        prodOrderStatuses: prodStatusInfo.statuses
+        detailItems: supplyItems
       });
     }
 
@@ -260,21 +287,27 @@ export default async function handler(req, res) {
     const totalCancelOrderCount = summary.reduce((sum, row) => sum + row.cancelOrderCount, 0);
     const totalCancelAmount = summary.reduce((sum, row) => sum + row.cancelAmount, 0);
 
-    const memberRows = summary.map(row => `
-      <tr>
-        <td>${escapeHtml(row.memberId)}</td>
-        <td>${escapeHtml(row.displayName)}</td>
-        <td>${row.normalOrderCount.toLocaleString('ko-KR')}건</td>
-        <td class="amount">${won(row.normalAmount)}</td>
-        <td class="cancel">${row.cancelOrderCount.toLocaleString('ko-KR')}건</td>
-        <td class="cancel">${won(row.cancelAmount)}</td>
-      </tr>
-    `).join('');
+    const memberRows = summary.length
+      ? summary.map(row => `
+        <tr>
+          <td>${escapeHtml(row.memberCode)}</td>
+          <td>${escapeHtml(row.displayName)}</td>
+          <td>${row.normalOrderCount.toLocaleString('ko-KR')}건</td>
+          <td class="amount">${won(row.normalAmount)}</td>
+          <td class="cancel">${row.cancelOrderCount.toLocaleString('ko-KR')}건</td>
+          <td class="cancel">${won(row.cancelAmount)}</td>
+        </tr>
+      `).join('')
+      : `<tr><td colspan="6" class="empty">부자재 주문 내역이 없습니다.</td></tr>`;
 
     const recentOrderRows = orderRows.length
-      ? orderRows.map(order => `
+      ? orderRows.map((order, index) => `
         <tr class="${order.status === '취소/환불' ? 'is-cancel' : ''}">
-          <td>${escapeHtml(order.orderNo)}</td>
+          <td>
+            <button class="order-link" type="button" data-order-index="${index}">
+              ${escapeHtml(order.orderNo)}
+            </button>
+          </td>
           <td>${escapeHtml(order.name)}</td>
           <td>${escapeHtml(order.productSummary)}</td>
           <td>${won(order.amount)}</td>
@@ -286,7 +319,15 @@ export default async function handler(req, res) {
           </td>
         </tr>
       `).join('')
-      : `<tr><td colspan="6" class="empty">최근 주문 내역이 없습니다.</td></tr>`;
+      : `<tr><td colspan="6" class="empty">최근 부자재 주문 내역이 없습니다.</td></tr>`;
+
+    const orderDetailsJson = JSON.stringify(orderRows.map(order => ({
+      orderNo: order.orderNo,
+      name: order.name,
+      amount: order.amount,
+      status: order.status,
+      items: order.detailItems
+    }))).replace(/</g, '\\u003c');
 
     const html = `<!doctype html>
 <html lang="ko">
@@ -477,38 +518,105 @@ export default async function handler(req, res) {
     background:#fffafa;
   }
 
+  .order-link{
+    border:0;
+    background:transparent;
+    color:#ff7a00;
+    font-weight:900;
+    cursor:pointer;
+    padding:0;
+    text-decoration:underline;
+    font-size:14px;
+  }
+
+  .modal-backdrop{
+    display:none;
+    position:fixed;
+    inset:0;
+    background:rgba(0,0,0,.48);
+    z-index:9999;
+    align-items:center;
+    justify-content:center;
+    padding:20px;
+  }
+
+  .modal-backdrop.is-open{
+    display:flex;
+  }
+
+  .modal{
+    width:100%;
+    max-width:560px;
+    background:#fff;
+    border-radius:18px;
+    box-shadow:0 20px 60px rgba(0,0,0,.2);
+    overflow:hidden;
+  }
+
+  .modal-head{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    padding:20px 22px;
+    border-bottom:1px solid #eee;
+  }
+
+  .modal-head h3{
+    margin:0;
+    font-size:20px;
+    font-weight:900;
+    letter-spacing:-0.04em;
+  }
+
+  .modal-close{
+    border:0;
+    background:#f5f5f5;
+    border-radius:999px;
+    width:34px;
+    height:34px;
+    cursor:pointer;
+    font-weight:900;
+  }
+
+  .modal-body{
+    padding:22px;
+  }
+
+  .modal-meta{
+    margin:0 0 16px;
+    color:#666;
+    font-size:13px;
+    line-height:1.6;
+  }
+
+  .modal-item{
+    padding:14px 0;
+    border-bottom:1px solid #eee;
+  }
+
+  .modal-item:last-child{
+    border-bottom:0;
+  }
+
+  .modal-item strong{
+    display:block;
+    font-size:15px;
+    margin-bottom:6px;
+  }
+
+  .modal-item span{
+    color:#666;
+    font-size:13px;
+  }
+
   @media(max-width:768px){
-    .wrap{
-      padding:28px 16px;
-    }
-
-    .head{
-      flex-direction:column;
-      align-items:flex-start;
-    }
-
-    h1{
-      font-size:28px;
-    }
-
-    .refresh{
-      width:100%;
-      box-sizing:border-box;
-    }
-
-    .summary{
-      grid-template-columns:1fr 1fr;
-      gap:12px;
-    }
-
-    .card,.section{
-      padding:18px;
-      border-radius:14px;
-    }
-
-    .card strong{
-      font-size:24px;
-    }
+    .wrap{ padding:28px 16px; }
+    .head{ flex-direction:column; align-items:flex-start; }
+    h1{ font-size:28px; }
+    .refresh{ width:100%; box-sizing:border-box; }
+    .summary{ grid-template-columns:1fr 1fr; gap:12px; }
+    .card,.section{ padding:18px; border-radius:14px; }
+    .card strong{ font-size:24px; }
   }
 </style>
 </head>
@@ -518,7 +626,7 @@ export default async function handler(req, res) {
       <div>
         <p class="kicker">FIELDUP PARTNER SALES</p>
         <h1>부자재 매출 확인</h1>
-        <p class="desc">협력 영업 고객사의 주문 건수와 매출을 확인할 수 있습니다.</p>
+        <p class="desc">부자재 카테고리 주문 건수와 매출을 확인할 수 있습니다.</p>
       </div>
       <a class="refresh" href="/api/first">새로고침</a>
     </div>
@@ -543,7 +651,7 @@ export default async function handler(req, res) {
     </div>
 
     <div class="notice">
-      정상 매출은 품목 주문 API의 상태값 기준으로 취소/환불 주문을 제외한 금액입니다. 품목 주문 상태가 CANCEL, REFUND, RETURN 계열이면 취소/환불로 분류합니다.
+      현재 부자재 집계 기준 카테고리 코드는 <strong>${SUPPLY_CATEGORY_CODE}</strong>입니다. 정상 매출은 품목 주문 상태가 CANCEL, REFUND, RETURN 계열인 주문을 제외한 금액입니다.
     </div>
 
     <div class="section">
@@ -552,7 +660,7 @@ export default async function handler(req, res) {
         <table>
           <thead>
             <tr>
-              <th>고객사 ID</th>
+              <th>회원코드</th>
               <th>고객사명</th>
               <th>정상 주문</th>
               <th>정상 매출</th>
@@ -584,6 +692,70 @@ export default async function handler(req, res) {
       </div>
     </div>
   </div>
+
+  <div class="modal-backdrop" id="orderModal">
+    <div class="modal">
+      <div class="modal-head">
+        <h3 id="modalTitle">주문 상세</h3>
+        <button class="modal-close" type="button" id="modalClose">×</button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+    </div>
+  </div>
+
+<script>
+  const ORDER_DETAILS = ${orderDetailsJson};
+
+  function won(num){
+    return Number(num || 0).toLocaleString('ko-KR') + '원';
+  }
+
+  const modal = document.getElementById('orderModal');
+  const modalTitle = document.getElementById('modalTitle');
+  const modalBody = document.getElementById('modalBody');
+  const modalClose = document.getElementById('modalClose');
+
+  document.querySelectorAll('.order-link').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      const index = Number(btn.getAttribute('data-order-index'));
+      const order = ORDER_DETAILS[index];
+
+      if(!order) return;
+
+      modalTitle.textContent = '주문 상세 - ' + order.orderNo;
+
+      let html = '<p class="modal-meta">' +
+        '고객명: ' + order.name + '<br>' +
+        '주문상태: ' + order.status + '<br>' +
+        '주문금액: ' + won(order.amount) +
+      '</p>';
+
+      if(!order.items || order.items.length === 0){
+        html += '<p>표시할 상품이 없습니다.</p>';
+      }else{
+        order.items.forEach(function(item){
+          html += '<div class="modal-item">' +
+            '<strong>' + item.prodName + '</strong>' +
+            '<span>수량: ' + (item.count || 1) + '개 / 금액: ' + won(item.price || 0) + '</span>' +
+          '</div>';
+        });
+      }
+
+      modalBody.innerHTML = html;
+      modal.classList.add('is-open');
+    });
+  });
+
+  modalClose.addEventListener('click', function(){
+    modal.classList.remove('is-open');
+  });
+
+  modal.addEventListener('click', function(e){
+    if(e.target === modal){
+      modal.classList.remove('is-open');
+    }
+  });
+</script>
 </body>
 </html>`;
 
